@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/firebase-admin'; // Using admin SDK for server-side auth verification
+
+// DO NOT import `auth` from `firebase-admin` here, as it's not Edge-compatible.
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -8,11 +9,18 @@ export async function middleware(request: NextRequest) {
   const isAuthPage = pathname.startsWith('/login') || pathname.startsWith('/signup');
   const isStudentPage = pathname.startsWith('/student');
   const isTeacherPage = pathname.startsWith('/teacher');
-  const isApiRoute = pathname.startsWith('/api');
+  const isApiInternalAuthRoute = pathname.startsWith('/api/auth'); // Exclude internal auth API routes from some checks
 
-  if (isApiRoute) {
-    return NextResponse.next(); // Allow API routes
+  // Allow internal auth API routes to be accessed
+  if (isApiInternalAuthRoute) {
+    return NextResponse.next();
   }
+  
+  // Allow other API routes (like Genkit flows)
+  if (pathname.startsWith('/api')) {
+    return NextResponse.next();
+  }
+
 
   if (!sessionCookie) {
     if (isAuthPage || pathname === '/') {
@@ -21,9 +29,50 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url)); // Redirect to login for protected routes
   }
 
+  // If session cookie exists, verify it by calling the API route
   try {
-    const decodedToken = await auth.verifySessionCookie(sessionCookie, true);
-    const userRole = decodedToken.role as string; // Assuming role is stored in custom claims
+    const verifyApiUrl = new URL('/api/auth/verify-token', request.url);
+    const verifyResponse = await fetch(verifyApiUrl.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Pass along the cookie if needed by the API route for other purposes,
+        // but here we explicitly send it in the body.
+      },
+      body: JSON.stringify({ sessionCookie }),
+    });
+
+    if (!verifyResponse.ok) {
+      // Verification failed (e.g., token invalid, expired)
+      const errorData = await verifyResponse.json().catch(() => ({ error: 'Verification API error' }));
+      console.error('Middleware session verification failed:', verifyResponse.status, errorData.error);
+      
+      const response = NextResponse.redirect(new URL('/login', request.url));
+      response.cookies.delete('__session'); // Clear invalid cookie
+
+      if (isAuthPage || pathname === '/') {
+        // If already on an auth page or landing page, don't redirect into a loop, just clear cookie and proceed
+         const nextResponse = NextResponse.next();
+         nextResponse.cookies.delete('__session');
+         return nextResponse;
+      }
+      return response;
+    }
+
+    const { role: userRole } = await verifyResponse.json();
+
+    if (!userRole) {
+        console.error('Middleware: Role not found in verified token.');
+        const response = NextResponse.redirect(new URL('/login', request.url));
+        response.cookies.delete('__session');
+        if (isAuthPage || pathname === '/') {
+             const nextResponse = NextResponse.next();
+             nextResponse.cookies.delete('__session');
+             return nextResponse;
+        }
+        return response;
+    }
+
 
     if (isAuthPage) {
       // If logged in and trying to access auth pages, redirect to respective dashboard
@@ -45,12 +94,15 @@ export async function middleware(request: NextRequest) {
 
     return NextResponse.next(); // User is authenticated and has correct role
   } catch (error) {
-    // Session cookie is invalid or expired
-    console.error('Middleware Auth Error:', error);
+    // Catch-all for unexpected errors during fetch or processing
+    console.error('Middleware Auth Error (catch-all):', error);
     const response = NextResponse.redirect(new URL('/login', request.url));
-    response.cookies.delete('__session'); // Clear invalid cookie
-    if (isAuthPage || pathname === '/') {
-        return NextResponse.next(); // Allow access to auth pages and landing if cookie verification fails (e.g. expired)
+    response.cookies.delete('__session'); // Clear potentially problematic cookie
+     if (isAuthPage || pathname === '/') {
+        // If already on an auth page or landing page, don't redirect into a loop
+         const nextResponse = NextResponse.next();
+         nextResponse.cookies.delete('__session');
+         return nextResponse;
     }
     return response;
   }
@@ -64,8 +116,11 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - assets (public assets)
-     * - api (Genkit flows)
+     * - files explicitly starting with /api/ (but we handle /api/auth/* and other /api/* specifically above)
+     * 
+     * The goal is to apply this middleware to pages and general navigation,
+     * while specific API routes like /api/auth/verify-token are handled or bypassed correctly.
      */
-    '/((?!_next/static|_next/image|favicon.ico|assets|api).*)',
+    '/((?!_next/static|_next/image|favicon.ico|assets).*)',
   ],
 };
