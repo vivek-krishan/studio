@@ -21,6 +21,7 @@ import Link from "next/link";
 import type { UserRole } from "@/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
+import { NextResponse } from "next/server";
 
 
 const loginSchema = z.object({
@@ -38,10 +39,17 @@ type AuthFormProps = {
 };
 
 export function AuthForm({ mode }: AuthFormProps) {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, user } = useAuth();
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+
+  console.log(user);
+
+  if(user) return NextResponse.redirect(
+    new URL("/student/dashboard", "http://localhost:3000")
+  );
+
 
   const currentSchema = mode === 'login' ? loginSchema : signupSchema;
 
@@ -58,7 +66,8 @@ export function AuthForm({ mode }: AuthFormProps) {
     setIsLoading(true);
     try {
       if (mode === 'login') {
-        await signIn(values.email, values.password);
+      await signIn(values.email, values.password);
+      console.log(user);
         toast({ title: "Login Successful", description: "Welcome back!" });
         router.push('/'); // Redirect to home, which will handle dashboard redirection
       } else if (mode === 'signup') {
