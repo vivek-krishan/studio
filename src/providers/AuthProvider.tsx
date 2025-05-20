@@ -1,10 +1,11 @@
+
 "use client";
 import type { User } from 'firebase/auth';
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut as firebaseSignOut, updateProfile as firebaseUpdateProfile } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type { ReactNode } from 'react';
 import { createContext, useEffect, useState } from 'react';
-import { auth, db } from '@/lib/firebase';
+import { auth as firebaseAuthService, db as firebaseDbService } from '@/lib/firebase'; // Renamed imports
 import type { UserProfile, UserRole } from '@/types';
 
 export interface AuthContextType {
@@ -28,18 +29,33 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    if (!firebaseAuthService) {
+      console.error("Firebase Auth service is not available. Authentication will not work. Please check Firebase configuration.");
+      setLoading(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(firebaseAuthService, async (firebaseUser) => {
       setLoading(true);
       if (firebaseUser) {
         setUser(firebaseUser);
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
-        const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists()) {
-          setUserProfile(userDocSnap.data() as UserProfile);
-        } else {
-          // This case might happen if user data is not yet created in Firestore
-          // Or if the user was created by other means. Handle as needed.
-          setUserProfile(null); 
+        if (!firebaseDbService) {
+          console.error("Firebase Firestore service is not available. Cannot fetch user profile.");
+          setUserProfile(null);
+          setLoading(false);
+          return;
+        }
+        const userDocRef = doc(firebaseDbService, 'users', firebaseUser.uid);
+        try {
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            setUserProfile(userDocSnap.data() as UserProfile);
+          } else {
+            setUserProfile(null); 
+          }
+        } catch (error) {
+          console.error("Error fetching user profile:", error);
+          setUserProfile(null);
         }
       } else {
         setUser(null);
@@ -51,7 +67,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   }, []);
 
   const signUp = async (email: string, pass: string, displayName: string, role: UserRole) => {
-    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+    if (!firebaseAuthService || !firebaseDbService) {
+      throw new Error("Firebase services not available. Signup failed. Please check Firebase configuration.");
+    }
+    const userCredential = await createUserWithEmailAndPassword(firebaseAuthService, email, pass);
     await firebaseUpdateProfile(userCredential.user, { displayName });
     
     const newUserProfile: UserProfile = {
@@ -60,18 +79,28 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       displayName: displayName,
       role: role,
     };
-    await setDoc(doc(db, 'users', userCredential.user.uid), newUserProfile);
-    setUser(userCredential.user);
-    setUserProfile(newUserProfile);
+    await setDoc(doc(firebaseDbService, 'users', userCredential.user.uid), newUserProfile);
+    // onAuthStateChanged will update user and userProfile state, no need to explicitly set here
+    // to avoid potential race conditions or duplicate state updates.
   };
 
   const signIn = async (email: string, pass:string) => {
-    await signInWithEmailAndPassword(auth, email, pass);
+    if (!firebaseAuthService) {
+      throw new Error("Firebase Auth service not available. Sign-in failed. Please check Firebase configuration.");
+    }
+    await signInWithEmailAndPassword(firebaseAuthService, email, pass);
     // onAuthStateChanged will handle setting user and userProfile
   };
 
   const signOut = async () => {
-    await firebaseSignOut(auth);
+    if (!firebaseAuthService) {
+      console.error("Firebase Auth service not available. Sign-out might not complete fully in Firebase.");
+      // Still attempt to clear local state
+      setUser(null);
+      setUserProfile(null);
+      return;
+    }
+    await firebaseSignOut(firebaseAuthService);
     setUser(null);
     setUserProfile(null);
   };

@@ -13,46 +13,57 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Client-side check for missing crucial configuration
-if (typeof window !== 'undefined') { // Only run in browser
+// Client-side check for missing crucial configuration. This runs when the module is loaded.
+if (typeof window !== 'undefined') {
   if (!firebaseConfig.apiKey) {
     console.warn(
       "Firebase API Key is missing. Please ensure NEXT_PUBLIC_FIREBASE_API_KEY is correctly set in your .env file and that your Next.js server has been restarted after any changes to .env."
     );
   }
-  // You could add more checks for other keys like projectId if needed:
-  // if (!firebaseConfig.projectId) {
-  //   console.warn(
-  //     "Firebase Project ID is missing. Please check your NEXT_PUBLIC_FIREBASE_PROJECT_ID environment variable."
-  //   );
-  // }
+  if (!firebaseConfig.projectId) {
+    console.warn(
+      "Firebase Project ID is missing. Please ensure NEXT_PUBLIC_FIREBASE_PROJECT_ID is correctly set."
+    );
+  }
+  if (!firebaseConfig.authDomain) {
+    console.warn("Firebase Auth Domain is missing. Please ensure NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN is correctly set.");
+  }
+  // Add more checks as needed, e.g., for appId
+  if (!firebaseConfig.appId) {
+    console.warn("Firebase App ID is missing. Please ensure NEXT_PUBLIC_FIREBASE_APP_ID is correctly set.");
+  }
 }
 
-let app: FirebaseApp;
-if (!getApps().length) {
-  // Only initialize if the API key is present, to avoid further errors if it's missing.
-  // The warning above should guide the user.
-  if (firebaseConfig.apiKey) {
+let app: FirebaseApp | undefined = undefined;
+let authInstance: Auth | undefined = undefined;
+let dbInstance: Firestore | undefined = undefined;
+let storageInstance: FirebaseStorage | undefined = undefined;
+
+if (getApps().length) {
+  app = getApp();
+  try {
+    authInstance = getAuth(app);
+    dbInstance = getFirestore(app);
+    storageInstance = getStorage(app);
+  } catch (error) {
+      console.error("Error getting Firebase services from existing app:", error);
+  }
+} else if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId) {
+  // Only attempt to initialize if essential config values are present
+  try {
     app = initializeApp(firebaseConfig);
-  } else {
-    // If apiKey is missing, we can't initialize Firebase.
-    // We'll throw an error here to make it very clear in the console.
-    // Alternatively, app could remain undefined, and subsequent getAuth/getFirestore calls would fail.
-    console.error("CRITICAL: Firebase initialization failed due to missing API key. App will not function correctly.");
-    // To prevent the app from crashing entirely here, we might assign a dummy or throw later.
-    // For now, let's let it proceed and subsequent Firebase calls will fail, which is where the original error came from.
-    // This means `getAuth(app)` will likely fail if app is not initialized.
-    // A more robust solution for a broken config might be to provide a dummy app or gate Firebase features.
-    // However, the core issue is the missing env var.
-    app = {} as FirebaseApp; // Assign a type-compatible empty object to prevent immediate crash, errors will occur on usage.
+    authInstance = getAuth(app);
+    dbInstance = getFirestore(app);
+    storageInstance = getStorage(app);
+  } catch (error) {
+    console.error("CRITICAL: Firebase initialization failed:", error);
+    // app, authInstance, dbInstance, storageInstance remain undefined
   }
 } else {
-  app = getApp();
+  console.error(
+    "CRITICAL: Firebase initialization skipped due to missing essential configuration (apiKey, projectId, or appId). Firebase features will not work."
+  );
 }
 
-// These will throw errors if 'app' is not a properly initialized FirebaseApp instance
-const auth: Auth = getAuth(app);
-const db: Firestore = getFirestore(app);
-const storage: FirebaseStorage = getStorage(app);
-
-export { app, auth, db, storage };
+// Export potentially undefined services. Consuming code must check for their existence.
+export { app, authInstance as auth, dbInstance as db, storageInstance as storage };
